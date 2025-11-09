@@ -1,0 +1,10 @@
+{
+  "name": "expertisediag-mail-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "@getbrevo/brevo": "^2.1.0"
+  }
+}
