@@ -1,0 +1,14 @@
+// expertisediag-mail-api/tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": ".vercel/output"
+  },
+  "include": ["api/**/*.ts"]
+}

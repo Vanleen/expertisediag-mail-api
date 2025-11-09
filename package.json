@@ -3,9 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "tsc -p .",
+    "start": "vercel dev"
+  },
   "dependencies": {
-    "@getbrevo/brevo": "^2.1.0",
-    "nodemailer": "^7.0.10"
+    "nodemailer": "^6.9.15"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^6.4.15",
+    "typescript": "^5.9.3"
   }
 }
