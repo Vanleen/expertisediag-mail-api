@@ -1,14 +1,16 @@
-// Vercel serverless function: POST /api/send-devis
-// Pas de types @vercel/node pour éviter TS2307
-import nodemailer from "nodemailer";
+// api/send-devis.ts
+import type { IncomingMessage, ServerResponse } from 'http';
+import nodemailer from 'nodemailer';
 
-// Origins autorisés (prod + local dev Astro)
-const ALLOWED_ORIGINS = [
-  "https://www.expertisediag.fr",
-  "http://localhost:4321",
-];
+// --- ORIGINES AUTORISÉES (dev + prod) ---
+const ALLOWED_ORIGINS = new Set([
+  'http://127.0.0.1:4321',
+  'http://localhost:4321',
+  'https://expertisediag.fr',
+  'https://www.expertisediag.fr',
+]);
 
-// Limites simples de longueur (sanitization)
+// Limites simples
 const MAX = {
   fullName: 120,
   phone: 40,
@@ -20,141 +22,148 @@ const MAX = {
   message: 4000,
 };
 
-export default async function handler(req: any, res: any) {
-  // CORS basique
-  const origin = String(req.headers?.origin || "");
-  if (ALLOWED_ORIGINS.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-  }
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "method_not_allowed" });
-
-  try {
-    const b = (req.body || {}) as Record<string, string>;
-
-    // Honeypot anti-bot (champ caché côté front)
-    if ((b.company || "").trim()) return res.status(200).json({ ok: true });
-
-    // hCaptcha côté serveur
-    const token = (b.hcaptchaToken || "").trim();
-    if (!token) return res.status(400).json({ ok: false, error: "captcha_missing" });
-
-    const secret = process.env.HCAPTCHA_SECRET;
-    if (!secret) throw new Error("HCAPTCHA_SECRET missing");
-
-    const vresp = await fetch("https://hcaptcha.com/siteverify", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ secret, response: token }).toString(),
-    });
-    const vjson = await vresp.json();
-    if (!vjson?.success) return res.status(400).json({ ok: false, error: "captcha_failed" });
-
-    // Sanitize + validations
-    const v = {
-      fullName: cut(txt(b.fullName), MAX.fullName),
-      phone: cut(txt(b.phone), MAX.phone),
-      email: cut(txt(b.email), MAX.email),
-      city: cut(txt(b.city), MAX.city),
-      propertyType: cut(txt(b.propertyType), MAX.propertyType),
-      context: cut(txt(b.context), MAX.context),
-      diagnostics: cut(txt(b.diagnostics), MAX.diagnostics),
-      message: cut(txt(b.message), MAX.message),
-    };
-
-    if (!v.fullName || !v.phone || !v.message) {
-      return res.status(400).json({ ok: false, error: "missing_fields" });
-    }
-    if (v.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email)) {
-      return res.status(400).json({ ok: false, error: "invalid_email" });
-    }
-    if (!/^[0-9+().\s-]{6,}$/.test(v.phone)) {
-      return res.status(400).json({ ok: false, error: "invalid_phone" });
-    }
-
-    // ===== Envoi email via OVH SMTP (Nodemailer) =====
-    const host = process.env.SMTP_HOST || "";
-    const port = Number(process.env.SMTP_PORT || "587"); // 587 STARTTLS par défaut
-    const user = process.env.SMTP_USER || "";
-    const pass = process.env.SMTP_PASS || "";
-    const MAIL_TO = process.env.MAIL_TO || "contact@expertisediag.fr";
-
-    const canEmail = !!host && !!user && !!pass;
-    if (!canEmail) {
-      // SMTP non configuré -> on répond explicitement
-      return res.status(501).json({ ok: false, error: "email_disabled" });
-    }
-
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: port === 465, // true si 465 (SMTPS), sinon STARTTLS
-      auth: { user, pass },
-    });
-
-    const subject = `Demande de devis — ${v.fullName} (${v.context || "—"})`;
-    const html = buildHtml(v);
-    const text = buildPlainText(v);
-
-    await transporter.sendMail({
-      from: `"Expertise Diag" <${user}>`, // expéditeur = ta boîte OVH
-      to: MAIL_TO,
-      replyTo: v.email ? v.email : undefined, // si l’utilisateur a mis un email
-      subject,
-      text,
-      html,
-    });
-
-    return res.status(200).json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ ok: false, error: "internal" });
-  }
-}
-
-// -------- Utils --------
-function txt(s: any) { return typeof s === "string" ? s.trim() : ""; }
+// Utils
+function txt(v: any) { return typeof v === 'string' ? v.trim() : ''; }
 function cut(s: string, n: number) { return s.length > n ? s.slice(0, n) : s; }
 function esc(s: string) {
   return s.replace(/[&<>"']/g, (m) => (
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" } as Record<string, string>)[m]!
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string,string>)[m]!
   ));
 }
-
-function buildPlainText(v: Record<string,string>) {
-  const lines = [
-    "Demande de devis — Expertise Diag",
-    "",
-    "Nom: " + v.fullName,
-    "Téléphone: " + v.phone,
-    "Email: " + (v.email || "—"),
-    "Ville: " + (v.city || "—"),
-    "Type de bien: " + (v.propertyType || "—"),
-    "Contexte: " + (v.context || "—"),
-    "Diagnostics: " + (v.diagnostics || "—"),
-    "",
-    "Message:",
-    v.message,
-  ];
-  return lines.join("\n");
+async function readJson(req: IncomingMessage) {
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(c as Buffer);
+  const raw = Buffer.concat(chunks).toString('utf8') || '{}';
+  try { return JSON.parse(raw); } catch { return {}; }
 }
 
-function buildHtml(v: Record<string,string>) {
-  return (
-    "<h2>Demande de devis</h2>" +
-    "<ul>" +
-    "<li><b>Nom</b> : " + esc(v.fullName) + "</li>" +
-    "<li><b>Téléphone</b> : " + esc(v.phone) + "</li>" +
-    "<li><b>Email</b> : " + esc(v.email || "—") + "</li>" +
-    "<li><b>Ville</b> : " + esc(v.city || "—") + "</li>" +
-    "<li><b>Type de bien</b> : " + esc(v.propertyType || "—") + "</li>" +
-    "<li><b>Contexte</b> : " + esc(v.context || "—") + "</li>" +
-    "<li><b>Diagnostics</b> : " + esc(v.diagnostics || "—") + "</li>" +
-    "</ul>" +
-    "<p><b>Message :</b><br/>" + esc(v.message).replace(/\n/g, "<br/>") + "</p>"
-  );
+// --- HANDLER ---
+export default async function handler(req: any, res: any) {
+  // CORS
+  const origin = String(req?.headers?.origin || '');
+  if (ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Max-Age', '86400');
+
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    return res.end();
+  }
+  if (req.method !== 'POST') {
+    res.statusCode = 405;
+    return res.end(JSON.stringify({ ok: false, error: 'method_not_allowed' }));
+  }
+
+  try {
+    const body = await readJson(req);
+
+    // Honeypot
+    if (txt(body.company)) {
+      res.statusCode = 200;
+      return res.end(JSON.stringify({ ok: true }));
+    }
+
+    // hCaptcha server-side
+    const token = txt(body.hcaptchaToken);
+    const secret = process.env.HCAPTCHA_SECRET;
+    if (!secret) {
+      res.statusCode = 500;
+      return res.end(JSON.stringify({ ok: false, error: 'server_config' }));
+    }
+    if (!token) {
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ ok: false, error: 'captcha_missing' }));
+    }
+
+    const verify = await fetch('https://hcaptcha.com/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ secret, response: token }).toString(),
+    }).then(r => r.json());
+
+    if (!verify?.success) {
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ ok: false, error: 'captcha_failed' }));
+    }
+
+    // Données + validations
+    const v = {
+      fullName: cut(txt(body.fullName), MAX.fullName),
+      phone: cut(txt(body.phone), MAX.phone),
+      email: cut(txt(body.email), MAX.email),
+      city: cut(txt(body.city), MAX.city),
+      propertyType: cut(txt(body.propertyType), MAX.propertyType),
+      context: cut(txt(body.context), MAX.context),
+      diagnostics: cut(Array.isArray(body.diagnostics) ? body.diagnostics.join(', ') : txt(body.diagnostics), MAX.diagnostics),
+      message: cut(txt(body.message), MAX.message),
+    };
+
+    if (!v.fullName || !v.phone || !v.message) {
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ ok: false, error: 'missing_fields' }));
+    }
+    if (v.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email)) {
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ ok: false, error: 'invalid_email' }));
+    }
+    if (!/[0-9()+.\- ]{6,}/.test(v.phone)) {
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ ok: false, error: 'invalid_phone' }));
+    }
+
+    // SMTP (OVH)
+    const SMTP_HOST = process.env.SMTP_HOST;
+    const SMTP_PORT = Number(process.env.SMTP_PORT || '587');
+    const SMTP_USER = process.env.SMTP_USER;
+    const SMTP_PASS = process.env.SMTP_PASS;
+    const TO_EMAIL  = process.env.MAIL_TO || process.env.TO_EMAIL || 'contact@expertisediag.fr';
+
+    if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
+      res.statusCode = 500;
+      return res.end(JSON.stringify({ ok: false, error: 'smtp_config' }));
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: SMTP_PORT === 465,
+      auth: { user: SMTP_USER, pass: SMTP_PASS },
+    });
+
+    const subject = `Demande de devis — ${v.fullName} (${v.context || '—'})`;
+    const html = `
+      <h2>Demande de devis</h2>
+      <ul>
+        <li><b>Nom</b> : ${esc(v.fullName)}</li>
+        <li><b>Téléphone</b> : ${esc(v.phone)}</li>
+        <li><b>Email</b> : ${esc(v.email || '—')}</li>
+        <li><b>Ville</b> : ${esc(v.city || '—')}</li>
+        <li><b>Type de bien</b> : ${esc(v.propertyType || '—')}</li>
+        <li><b>Contexte</b> : ${esc(v.context || '—')}</li>
+        <li><b>Diagnostics</b> : ${esc(v.diagnostics || '—')}</li>
+      </ul>
+      <p><b>Message :</b><br/>${esc(v.message).replace(/\n/g, '<br/>')}</p>
+    `;
+    const text = html.replace(/<[^>]+>/g, '');
+
+    await transporter.sendMail({
+      from: `"Expertise Diag" <${SMTP_USER}>`,
+      to: TO_EMAIL,
+      subject,
+      text,
+      html,
+      replyTo: v.email || undefined,
+    });
+
+    res.statusCode = 200;
+    return res.end(JSON.stringify({ ok: true }));
+  } catch (e) {
+    console.error('send-devis error:', e);
+    res.statusCode = 500;
+    return res.end(JSON.stringify({ ok: false, error: 'internal' }));
+  }
 }
