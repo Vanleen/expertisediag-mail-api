@@ -1,3 +1,7 @@
 // expertisediag-mail-api/.gitignore
 node_modules/
 .DS_Store
+
+# Never commit secrets
+.env
+.env.*
